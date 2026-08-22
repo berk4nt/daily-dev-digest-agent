@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Daily Dev Digest Agent — an always-on agent that summarizes a GitHub
+  repo's daily activity and CloudWatch error logs into a digest posted to
+  Slack every morning, using Amazon Bedrock (Nova).
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Description: "owner/repo to watch, e.g. octocat/hello-world"
+  CloudWatchLogGroups:
+    Type: CommaDelimitedList
+    Description: Log groups to scan for errors (leave empty for none)
+    Default: ""
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+  ScheduleExpression:
+    Type: String
+    Default: "cron(0 6 * * ? *)"
+    Description: When to run daily, in UTC (default 06:00 UTC)
+
+Resources:
+  DigestHistoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-digest-history"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: date
+          KeyType: HASH
+
+  GitHubTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/github-token"
+      Description: GitHub PAT with read access to the watched repo (fine-grained, contents+PR+issues read-only)
+      SecretString: "REPLACE_ME"
+
+  SlackWebhookSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/slack-webhook-url"
+      Description: Slack Incoming Webhook URL
+      SecretString: "REPLACE_ME"
+
+  DigestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.handler
+      Runtime: python3.12
+      Timeout: 90
+      MemorySize: 256
+      Environment:
+        Variables:
+          GITHUB_REPO: !Ref GitHubRepo
+          GITHUB_TOKEN_SECRET_ARN: !Ref GitHubTokenSecret
+          SLACK_WEBHOOK_SECRET_ARN: !Ref SlackWebhookSecret
+          CLOUDWATCH_LOG_GROUPS: !Join [",", !Ref CloudWatchLogGroups]
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          DYNAMODB_TABLE: !Ref DigestHistoryTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DigestHistoryTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource:
+                - !Ref GitHubTokenSecret
+                - !Ref SlackWebhookSecret
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/*"
+            - Effect: Allow
+              Action:
+                - logs:StartQuery
+                - logs:GetQueryResults
+                - logs:DescribeLogGroups
+              Resource: "*"
+      Events:
+        DailySchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: !Ref ScheduleExpression
+            ScheduleExpressionTimezone: UTC
+            FlexibleTimeWindow:
+              Mode: "OFF"
+
+Outputs:
+  FunctionName:
+    Value: !Ref DigestFunction
+  DigestHistoryTableName:
+    Value: !Ref DigestHistoryTable
+  NextSteps:
+    Value: >
+      After deploy, update the two Secrets Manager secrets (github-token,
+      slack-webhook-url) with real values — they are created with a
+      placeholder "REPLACE_ME" on purpose.
