@@ -31,18 +31,7 @@ repeated by every team, every day.
 6. The digest is posted to a **Slack** channel via Incoming Webhook, and
    saved back to DynamoDB for tomorrow's run to reference.
 
-```
-EventBridge Schedule (daily, cron)
-        │
-        ▼
-    Lambda (Python 3.12)
-    ├─ GitHub REST API      → commits / merged PRs / issues (last 24h)
-    ├─ CloudWatch Logs Insights → error/exception patterns (last 24h)
-    ├─ DynamoDB (read)      → recurring risk notes from prior days
-    ├─ Amazon Bedrock (Nova)→ generate the digest
-    ├─ Slack Incoming Webhook → post digest
-    └─ DynamoDB (write)     → archive today's digest
-```
+![Architecture diagram: EventBridge Scheduler triggers a Lambda function, which reads from GitHub, CloudWatch Logs, and DynamoDB, sends the combined activity to Amazon Bedrock, then posts the digest to Slack and writes it back to DynamoDB.](docs/architecture-diagram.png)
 
 ## AWS services used
 
